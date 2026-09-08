@@ -1,0 +1,9 @@
+[package]
+name = "rattymedia-client"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+mousefood = { version = "0.5.2", features = [] }
+ratatui = "0.30.2"
+embedded-graphics-simulator = "0.8.0"
