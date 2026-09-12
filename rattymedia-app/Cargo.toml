@@ -1,0 +1,11 @@
+[package]
+name = "rattymedia-app"
+version.workspace = true
+edition.workspace = true
+description = "The abstract rattymedia app"
+
+[lib]
+
+[dependencies]
+ratatui = { workspace = true }
+thiserror = "2"

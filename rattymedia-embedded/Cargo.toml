@@ -1,0 +1,9 @@
+[package]
+name = "rattymedia-embedded"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ratatui = { workspace = true, features = ["crossterm", "layout-cache", ] }
+rattymedia-app = { workspace = true }
+mousefood = { version = "*", features = ["framebuffer", "fonts"] }

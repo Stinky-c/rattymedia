@@ -1,0 +1,8 @@
+[package]
+name = "rattymedia-native"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ratatui = { workspace = true, features = ["crossterm", "layout-cache", ] }
+rattymedia-app = { workspace = true }
