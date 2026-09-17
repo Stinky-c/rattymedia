@@ -1,3 +1,4 @@
+// #![no_std]
 use mousefood::embedded_graphics::mock_display::MockDisplay;
 use mousefood::prelude::Rgb565;
 use mousefood::{EmbeddedBackend, EmbeddedBackendConfig};

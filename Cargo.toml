@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
-members = ["rattymedia-app", "rattymedia-embedded", "rattymedia-native", "rattymedia-server", ]
+members = ["rattymedia-app", "rattymedia-embedded", "rattymedia-native", "rattymedia-proto", "rattymedia-server"]
+exclude = ["rattymedia-cyd"] # Cargo workspaces do not support different toolchains and configs in memeber
 
 [workspace.package]
 version = "0.0.1"
@@ -8,6 +9,10 @@ edition = "2024"
 
 [workspace.dependencies]
 rattymedia-app = { path = "rattymedia-app" }
+rattymedia-proto = { path = "rattymedia-proto" }
+
 ratatui = { version = "0.30", default-features = false, features = ["all-widgets", "macros"] }
 ratatui-core = { version = "0.1.2", features = [], default-features = false }
+
+log = { version = "0.4", default-features = false, features = [] }
 

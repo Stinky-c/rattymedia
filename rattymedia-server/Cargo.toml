@@ -4,3 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+tokio = { version = "1", features = ["full"] }
+windows = { version = "*", features = ["Foundation", "Media_Control", "Storage_Streams"] }
+rattymedia-proto = { workspace = true, features = ["std"] }
+color-eyre = "*"
+async-trait = "0.1"

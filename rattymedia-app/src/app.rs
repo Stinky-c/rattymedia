@@ -1,20 +1,19 @@
 use crate::InputEvent;
-use crate::components::fps::FpsCounterState;
+use alloc::vec;
+use log::info;
 use ratatui::backend::Backend;
-use ratatui::layout::{Rect, Size};
+use ratatui::prelude::{Constraint, Layout};
 use ratatui::style::Style;
-use ratatui::widgets::{Block, RatatuiLogo, RatatuiMascot, Tabs};
+use ratatui::widgets::{Block, RatatuiMascot, Tabs};
 use ratatui::{Frame, Terminal};
-use std::time::{Duration, Instant};
 
 pub struct App<TERM: Backend> {
     terminal: Terminal<TERM>,
     should_quit: bool,
-    last_draw: Instant,
     state: AppState,
 }
 pub struct AppState {
-    fps: FpsCounterState,
+    // fps: FpsCounterState,
 }
 
 impl<TERM: Backend> App<TERM> {
@@ -22,21 +21,17 @@ impl<TERM: Backend> App<TERM> {
         Self {
             terminal,
             should_quit: false,
-            last_draw: Instant::now(),
             state: AppState {
-                fps: FpsCounterState::new(),
+                // fps: FpsCounterState::new(),
             },
         }
     }
 
     /// Returns true if loop should quit
     pub fn try_run(&mut self) -> Result<bool, <TERM as Backend>::Error> {
-        let this_draw = Instant::now();
-        let diff = this_draw.duration_since(self.last_draw);
-
-        let frame = self
+        let _frame = self
             .terminal
-            .try_draw(|frame| Self::try_draw(&mut self.state, frame))?;
+            .try_draw(|frame| Self::try_draw(frame, &mut self.state))?;
         Ok(self.should_quit)
     }
 
@@ -44,7 +39,10 @@ impl<TERM: Backend> App<TERM> {
         match event {
             InputEvent::Noop => Ok(()),
             InputEvent::Click(_, _) => todo!(),
-            InputEvent::Resize(x, y) => self.terminal.autoresize(),
+            InputEvent::Resize(_, _) => {
+                info!("Got resize event");
+                self.terminal.autoresize()
+            }
             InputEvent::Quit => {
                 self.should_quit = true;
                 Ok(())
@@ -52,19 +50,25 @@ impl<TERM: Backend> App<TERM> {
         }
     }
 
-    fn try_draw(state: &mut AppState, frame: &mut Frame) -> Result<(), <TERM as Backend>::Error> {
+    fn try_draw(frame: &mut Frame, _state: &mut AppState) -> Result<(), <TERM as Backend>::Error> {
+        let _horizontal = Layout::horizontal([Constraint::Percentage(100)]).spacing(1);
+        let _vertical = Layout::vertical([Constraint::Length(2), Constraint::Fill(1)]).spacing(1);
+
+        // let area
+
         let tabs = Tabs::new(vec!["Hello", "World"])
             .block(Block::bordered().title("rattymedia"))
             .style(Style::default().white());
 
         frame.render_widget(tabs, frame.area());
+
         let logo = RatatuiMascot::new();
         frame.render_widget(logo, frame.area());
-        frame.render_stateful_widget(
-            crate::components::fps::FpsCounter,
-            frame.area(),
-            &mut state.fps,
-        );
+        // frame.render_stateful_widget(
+        //     crate::components::fps::FpsCounter,
+        //     frame.area(),
+        //     &mut state.fps,
+        // );
         Ok(())
     }
 }

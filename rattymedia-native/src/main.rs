@@ -30,15 +30,11 @@ fn input_loop() -> io::Result<InputEvent> {
         let event = event::read()?;
 
         match event {
-            Event::Mouse(mouse_event) => Ok(InputEvent::Click(mouse_event.column, mouse_event.row)),
+            Event::Mouse(mouse_event) if mouse_event.kind.is_up() => {
+                Ok(InputEvent::Click(mouse_event.column, mouse_event.row))
+            }
             Event::Resize(x, y) => Ok(InputEvent::Resize(x, y)),
-            Event::Key(key) => match key.code {
-                (KeyCode::Esc | KeyCode::Char('q')) => Ok(InputEvent::Quit),
-                _ => {
-                    println!("{:?}", key.code);
-                    Ok(InputEvent::Noop)
-                }
-            },
+            Event::Key(key) if key.code.is_char('q') => Ok(InputEvent::Quit),
             _ => Ok(InputEvent::Noop),
         }
     } else {

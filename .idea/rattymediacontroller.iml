@@ -6,6 +6,7 @@
       <sourceFolder url="file://$MODULE_DIR$/rattymedia-app/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/rattymedia-native/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/rattymedia-embedded/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/rattymedia-proto/src" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
     </content>
     <orderEntry type="inheritedJdk" />

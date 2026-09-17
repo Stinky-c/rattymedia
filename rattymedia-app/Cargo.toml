@@ -9,3 +9,4 @@ description = "The abstract rattymedia app"
 [dependencies]
 ratatui = { workspace = true }
 thiserror = "2"
+log = { workspace = true, default-features = false }

@@ -7,3 +7,6 @@ edition.workspace = true
 ratatui = { workspace = true, features = ["crossterm", "layout-cache", ] }
 rattymedia-app = { workspace = true }
 mousefood = { version = "*", features = ["framebuffer", "fonts"] }
+log = { workspace = true, features = ["std", "alloc"] }
+
+#esp-alloc = { version = "*" }

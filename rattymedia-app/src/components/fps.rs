@@ -1,7 +1,6 @@
 use crate::components::Component;
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
-use std::convert::Infallible;
 use std::time::Instant;
 
 pub struct FpsCounter;
