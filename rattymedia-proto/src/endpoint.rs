@@ -1,15 +1,21 @@
-//! `std` runtime endpoint with callback registry and mpsc-based outbound queue.
+//! `std` runtime endpoint with typed callback registry and mpsc-based outbound queue.
 
 use core::future::Future;
+use core::marker::PhantomData;
 use core::pin::Pin;
 
 use futures::channel::{mpsc, oneshot};
 use futures_util::StreamExt;
 use heapless::Vec;
+use serde::Serialize;
+use serde::de::DeserializeOwned;
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
-use crate::{read_frame, write_frame, Frame, FrameDecoder, MessageKind, ProtocolError};
+use crate::{
+    DEFAULT_OUTBOUND_QUEUE_CAPACITY, Frame, FrameDecoder, MessageKind, ProtocolError, read_frame,
+    write_frame,
+};
 
 pub type RequestFuture<const MAX_PAYLOAD: usize> = Pin<
     Box<
@@ -27,6 +33,22 @@ pub type RequestHandler<const MAX_PAYLOAD: usize> =
 pub type EventHandler<const MAX_PAYLOAD: usize> =
     Box<dyn FnMut(Frame<MAX_PAYLOAD>) -> EventFuture + Send>;
 
+/// Tracks an outstanding typed request and allows decoding the response into a struct.
+pub struct PendingTypedResponse<R, const MAX_PAYLOAD: usize> {
+    rx: oneshot::Receiver<Result<Vec<u8, MAX_PAYLOAD>, ProtocolError>>,
+    _marker: PhantomData<R>,
+}
+
+impl<R, const MAX_PAYLOAD: usize> PendingTypedResponse<R, MAX_PAYLOAD>
+where
+    R: DeserializeOwned,
+{
+    pub async fn recv(self) -> Result<R, ProtocolError> {
+        let payload = self.rx.await.map_err(|_| ProtocolError::Closed)??;
+        deserialize_payload(payload.as_slice())
+    }
+}
+
 pub struct HandlerRegistry<const MAX_PAYLOAD: usize> {
     request_handlers: BTreeMap<u16, RequestHandler<MAX_PAYLOAD>>,
     event_handlers: BTreeMap<u16, EventHandler<MAX_PAYLOAD>>,
@@ -42,14 +64,63 @@ impl<const MAX_PAYLOAD: usize> Default for HandlerRegistry<MAX_PAYLOAD> {
 }
 
 impl<const MAX_PAYLOAD: usize> HandlerRegistry<MAX_PAYLOAD> {
-    pub fn register_request_handler<F>(&mut self, opcode: u16, handler: F)
+    /// Register a typed request callback. The incoming payload is deserialized into `Req`
+    /// and the returned `Resp` is serialized automatically.
+    pub fn register_request_handler<Req, Resp, F, Fut>(&mut self, opcode: u16, mut handler: F)
+    where
+        Req: DeserializeOwned + Send + 'static,
+        Resp: Serialize + Send + 'static,
+        F: FnMut(Req) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<Resp, ProtocolError>> + Send + 'static,
+    {
+        self.request_handlers.insert(
+            opcode,
+            Box::new(move |frame| {
+                let request = deserialize_payload::<Req>(frame.payload.as_slice());
+                match request {
+                    Ok(request) => {
+                        let future = handler(request);
+                        Box::pin(async move {
+                            let response = future.await?;
+                            serialize_payload::<MAX_PAYLOAD, _>(&response)
+                        })
+                    }
+                    Err(err) => Box::pin(async move { Err(err) }),
+                }
+            }),
+        );
+    }
+
+    /// Register a typed event callback. Event payload bytes are deserialized into `Event`.
+    pub fn register_event_handler<Event, F, Fut>(&mut self, opcode: u16, mut handler: F)
+    where
+        Event: DeserializeOwned + Send + 'static,
+        F: FnMut(Event) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<(), ProtocolError>> + Send + 'static,
+    {
+        self.event_handlers.insert(
+            opcode,
+            Box::new(move |frame| {
+                let event = deserialize_payload::<Event>(frame.payload.as_slice());
+                match event {
+                    Ok(event) => {
+                        let future = handler(event);
+                        Box::pin(async move { future.await })
+                    }
+                    Err(err) => Box::pin(async move { Err(err) }),
+                }
+            }),
+        );
+    }
+
+    pub fn register_request_frame_handler<F>(&mut self, opcode: u16, handler: F)
     where
         F: FnMut(Frame<MAX_PAYLOAD>) -> RequestFuture<MAX_PAYLOAD> + Send + 'static,
     {
         self.request_handlers.insert(opcode, Box::new(handler));
     }
 
-    pub fn register_event_handler<F>(&mut self, opcode: u16, handler: F)
+    pub fn register_event_frame_handler<F>(&mut self, opcode: u16, handler: F)
     where
         F: FnMut(Frame<MAX_PAYLOAD>) -> EventFuture + Send + 'static,
     {
@@ -148,7 +219,66 @@ where
         tx
     }
 
-    pub fn queue_request(
+    pub fn start_listening_default(&mut self) -> mpsc::Sender<OutboundMessage<MAX_PAYLOAD>> {
+        self.start_listening(DEFAULT_OUTBOUND_QUEUE_CAPACITY)
+    }
+
+    pub fn queue_event<Event>(
+        &self,
+        sender: &mut mpsc::Sender<OutboundMessage<MAX_PAYLOAD>>,
+        opcode: u16,
+        flags: u8,
+        event: &Event,
+    ) -> Result<(), ProtocolError>
+    where
+        Event: Serialize,
+    {
+        let payload = serialize_payload::<MAX_PAYLOAD, _>(event)?;
+        sender
+            .try_send(OutboundMessage::Event {
+                opcode,
+                flags,
+                payload,
+            })
+            .map_err(|_| ProtocolError::Closed)
+    }
+
+    pub fn queue_typed_request<Req, Resp>(
+        &mut self,
+        sender: &mut mpsc::Sender<OutboundMessage<MAX_PAYLOAD>>,
+        opcode: u16,
+        flags: u8,
+        request: &Req,
+    ) -> Result<PendingTypedResponse<Resp, MAX_PAYLOAD>, ProtocolError>
+    where
+        Req: Serialize,
+        Resp: DeserializeOwned,
+    {
+        let payload = serialize_payload::<MAX_PAYLOAD, _>(request)?;
+        let rx = self.queue_request_raw(sender, opcode, flags, payload.as_slice())?;
+        Ok(PendingTypedResponse {
+            rx,
+            _marker: PhantomData,
+        })
+    }
+
+    pub async fn request<Req, Resp>(
+        &mut self,
+        sender: &mut mpsc::Sender<OutboundMessage<MAX_PAYLOAD>>,
+        opcode: u16,
+        flags: u8,
+        request: &Req,
+    ) -> Result<Resp, ProtocolError>
+    where
+        Req: Serialize,
+        Resp: DeserializeOwned,
+    {
+        self.queue_typed_request::<Req, Resp>(sender, opcode, flags, request)?
+            .recv()
+            .await
+    }
+
+    pub fn queue_request_raw(
         &mut self,
         sender: &mut mpsc::Sender<OutboundMessage<MAX_PAYLOAD>>,
         opcode: u16,
@@ -184,25 +314,42 @@ where
     }
 
     pub async fn run_tx_loop(&mut self) -> Result<(), ProtocolError> {
-        let rx = self
-            .outbound_rx
-            .as_mut()
-            .ok_or(ProtocolError::MissingOutboundQueue)?;
-
-        while let Some(msg) = rx.next().await {
-            let frame = Self::outbound_to_frame(msg)?;
-            write_frame::<T, MAX_PAYLOAD, SERIALIZED_CAP, FRAME_CAP>(&mut self.transport, &frame).await?;
+        loop {
+            if !self.process_next_outbound().await? {
+                return Ok(());
+            }
         }
+    }
 
-        Ok(())
+    pub async fn process_next_outbound(&mut self) -> Result<bool, ProtocolError> {
+        let next = {
+            let rx = self
+                .outbound_rx
+                .as_mut()
+                .ok_or(ProtocolError::MissingOutboundQueue)?;
+            rx.next().await
+        };
+
+        let Some(msg) = next else {
+            return Ok(false);
+        };
+
+        let frame = Self::outbound_to_frame(msg)?;
+        write_frame::<T, MAX_PAYLOAD, SERIALIZED_CAP, FRAME_CAP>(&mut self.transport, &frame).await?;
+        Ok(true)
     }
 
     pub async fn run_rx_loop(&mut self) -> Result<(), ProtocolError> {
         loop {
-            let frame = read_frame::<T, MAX_PAYLOAD, FRAME_CAP>(&mut self.transport, &mut self.decoder).await?;
-            self.dispatch_incoming(frame).await?;
-            self.prune_timed_out();
+            self.process_next_incoming().await?;
         }
+    }
+
+    pub async fn process_next_incoming(&mut self) -> Result<(), ProtocolError> {
+        let frame = read_frame::<T, MAX_PAYLOAD, FRAME_CAP>(&mut self.transport, &mut self.decoder).await?;
+        self.dispatch_incoming(frame).await?;
+        self.prune_timed_out();
+        Ok(())
     }
 
     pub fn prune_timed_out(&mut self) {
@@ -298,6 +445,20 @@ where
             }
         }
     }
+}
+
+fn serialize_payload<const MAX_PAYLOAD: usize, T: Serialize>(value: &T) -> Result<Vec<u8, MAX_PAYLOAD>, ProtocolError> {
+    let mut serialized_buf = [0u8; MAX_PAYLOAD];
+    let serialized = postcard::to_slice(value, &mut serialized_buf).map_err(|_| ProtocolError::EncodeError)?;
+
+    let mut out = Vec::<u8, MAX_PAYLOAD>::new();
+    out.extend_from_slice(serialized)
+        .map_err(|_| ProtocolError::BufferTooSmall)?;
+    Ok(out)
+}
+
+fn deserialize_payload<T: DeserializeOwned>(payload: &[u8]) -> Result<T, ProtocolError> {
+    postcard::from_bytes(payload).map_err(|_| ProtocolError::DecodeError)
 }
 
 fn error_payload<const MAX_PAYLOAD: usize>(err: &ProtocolError) -> Result<Vec<u8, MAX_PAYLOAD>, ProtocolError> {
