@@ -4,10 +4,18 @@ version.workspace = true
 edition.workspace = true
 description = "Transport agnostic bi-di communication protocol"
 
-
 [lib]
 
 [dependencies]
+serde = { version = "1", default-features = false, features = ["derive"] }
+postcard = { version = "1", default-features = false }
+cobs = { version = "0.3", default-features = false }
+heapless = { version = "0.8", features = ["serde"] }
+embedded-io = "0.6"
+embedded-io-async = "0.6"
+futures = { version = "0.3", default-features = false, features = ["alloc"], optional = true }
+futures-util = { version = "0.3", default-features = false, features = ["alloc"], optional = true }
 
 [features]
-std = []
+default = []
+std = ["futures/std", "futures-util/std"]
