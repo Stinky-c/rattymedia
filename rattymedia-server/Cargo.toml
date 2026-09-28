@@ -5,7 +5,9 @@ edition = "2024"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
-windows = { version = "*", features = ["Foundation", "Media_Control", "Storage_Streams"] }
-rattymedia-proto = { workspace = true, features = ["std"] }
+windows = { version = "*", features = ["Foundation", "Media_Control", "Storage_Streams", "Win32_Foundation"] }
 color-eyre = "*"
 async-trait = "0.1"
+log = { workspace = true, features = ["kv", "kv_std"] }
+tap = "1.0.1"
+env_logger = { version = "0.11", features = ["kv", "auto-color"] }
