@@ -2,13 +2,12 @@
 name = "rattymedia-proto"
 version.workspace = true
 edition.workspace = true
+description = "Transport agnostic bi-di communication protocol"
+
+
+[lib]
 
 [dependencies]
-prost = { version = "0.14", default-features = false, features = ["derive"] }
-prost-types = { version = "0.14", default-features = false, features = [] }
-
-[build-dependencies]
-prost-build = "0.14.4"
 
 [features]
-std = ["prost/std", "prost-types/std"]
+std = []
