@@ -1,9 +1,14 @@
 //! Async transport helpers built on `embedded-io-async` traits.
 
-use crate::{encode_packet, Frame, FrameDecoder, ProtocolError};
+use crate::{Frame, FrameDecoder, ProtocolError, encode_packet};
 
 /// Encode and write one protocol frame to the transport.
-pub async fn write_frame<T, const MAX_PAYLOAD: usize, const SERIALIZED_CAP: usize, const TX_CAP: usize>(
+pub async fn write_frame<
+    T,
+    const MAX_PAYLOAD: usize,
+    const SERIALIZED_CAP: usize,
+    const TX_CAP: usize,
+>(
     transport: &mut T,
     frame: &Frame<MAX_PAYLOAD>,
 ) -> Result<(), ProtocolError>
@@ -26,7 +31,10 @@ where
 {
     loop {
         let mut byte = [0u8; 1];
-        let read = transport.read(&mut byte).await.map_err(|_| ProtocolError::Io)?;
+        let read = transport
+            .read(&mut byte)
+            .await
+            .map_err(|_| ProtocolError::Io)?;
         if read == 0 {
             return Err(ProtocolError::Closed);
         }

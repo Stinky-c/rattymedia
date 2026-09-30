@@ -4,11 +4,12 @@
 #[cfg(feature = "std")]
 extern crate std;
 
+extern crate alloc;
+
 mod codec;
 mod frame;
 mod io;
 
-#[cfg(feature = "std")]
 pub mod endpoint;
 
 /// Default maximum payload bytes for typed request/event bodies.
@@ -20,10 +21,10 @@ pub const DEFAULT_FRAME_CAP: usize = 512;
 /// Default outbound queue capacity for endpoint startup helpers.
 pub const DEFAULT_OUTBOUND_QUEUE_CAPACITY: usize = 16;
 
-pub use codec::{decode_packet, encode_packet, FrameDecoder};
+pub use codec::{FrameDecoder, decode_packet, encode_packet};
 #[cfg(feature = "std")]
 pub use endpoint::RpcEndpoint;
-pub use frame::{Frame, FrameHeader, MessageKind, ProtocolError, PROTOCOL_VERSION};
+pub use frame::{Frame, FrameHeader, MessageKind, PROTOCOL_VERSION, ProtocolError};
 pub use io::{read_frame, write_frame};
 
 #[cfg(feature = "std")]

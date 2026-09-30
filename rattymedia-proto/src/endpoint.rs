@@ -4,26 +4,20 @@ use core::future::Future;
 use core::marker::PhantomData;
 use core::pin::Pin;
 
-use futures::channel::{mpsc, oneshot};
-use futures_util::StreamExt;
+use alloc::{boxed::Box, collections::BTreeMap};
+use futures::channel::oneshot;
 use heapless::Vec;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use std::collections::BTreeMap;
-use std::time::{Duration, Instant};
+use thingbuf::mpsc;
 
 use crate::{
     DEFAULT_OUTBOUND_QUEUE_CAPACITY, Frame, FrameDecoder, MessageKind, ProtocolError, read_frame,
     write_frame,
 };
 
-pub type RequestFuture<const MAX_PAYLOAD: usize> = Pin<
-    Box<
-        dyn Future<Output = Result<Vec<u8, MAX_PAYLOAD>, ProtocolError>>
-            + Send
-            + 'static,
-    >,
->;
+pub type RequestFuture<const MAX_PAYLOAD: usize> =
+    Pin<Box<dyn Future<Output = Result<Vec<u8, MAX_PAYLOAD>, ProtocolError>> + Send + 'static>>;
 
 pub type EventFuture = Pin<Box<dyn Future<Output = Result<(), ProtocolError>> + Send + 'static>>;
 
@@ -127,7 +121,10 @@ impl<const MAX_PAYLOAD: usize> HandlerRegistry<MAX_PAYLOAD> {
         self.event_handlers.insert(opcode, Box::new(handler));
     }
 
-    async fn dispatch_request(&mut self, frame: Frame<MAX_PAYLOAD>) -> Result<Vec<u8, MAX_PAYLOAD>, ProtocolError> {
+    async fn dispatch_request(
+        &mut self,
+        frame: Frame<MAX_PAYLOAD>,
+    ) -> Result<Vec<u8, MAX_PAYLOAD>, ProtocolError> {
         match self.request_handlers.get_mut(&frame.header.opcode) {
             Some(handler) => handler(frame).await,
             None => Err(ProtocolError::UnsupportedOpcode(frame.header.opcode)),
@@ -142,6 +139,7 @@ impl<const MAX_PAYLOAD: usize> HandlerRegistry<MAX_PAYLOAD> {
     }
 }
 
+#[derive(Debug, Clone, Default)]
 pub enum OutboundMessage<const MAX_PAYLOAD: usize> {
     Request {
         opcode: u16,
@@ -166,26 +164,29 @@ pub enum OutboundMessage<const MAX_PAYLOAD: usize> {
         payload: Vec<u8, MAX_PAYLOAD>,
         request_id: u32,
     },
+    // Thingbuf demands a default value. It should never send or receive this value. Does not have a buffer because that is a waste of memory
+    #[default]
+    InternalError,
 }
 
 struct PendingRequest<const MAX_PAYLOAD: usize> {
-    sent_at: Instant,
+    // sent_at: Instant,
     responder: oneshot::Sender<Result<Vec<u8, MAX_PAYLOAD>, ProtocolError>>,
 }
 
 pub struct RpcEndpoint<
-    T,
+    T: embedded_io_async::Read + embedded_io_async::Write,
     const MAX_PAYLOAD: usize,
     const SERIALIZED_CAP: usize,
     const FRAME_CAP: usize,
 > {
+    /// Channel that handles read/write bytes.  Uses [embedded_io_async::Read] + [embedded_io_async::Write]
     transport: T,
     decoder: FrameDecoder<MAX_PAYLOAD, FRAME_CAP>,
     registry: HandlerRegistry<MAX_PAYLOAD>,
     outbound_rx: Option<mpsc::Receiver<OutboundMessage<MAX_PAYLOAD>>>,
     pending: BTreeMap<u32, PendingRequest<MAX_PAYLOAD>>,
     next_request_id: u32,
-    pending_timeout: Duration,
 }
 
 impl<T, const MAX_PAYLOAD: usize, const SERIALIZED_CAP: usize, const FRAME_CAP: usize>
@@ -201,26 +202,20 @@ where
             outbound_rx: None,
             pending: BTreeMap::new(),
             next_request_id: 1,
-            pending_timeout: Duration::from_secs(5),
         }
-    }
-
-    pub fn set_pending_timeout(&mut self, timeout: Duration) {
-        self.pending_timeout = timeout;
     }
 
     pub fn registry_mut(&mut self) -> &mut HandlerRegistry<MAX_PAYLOAD> {
         &mut self.registry
     }
 
-    pub fn start_listening(&mut self, queue_capacity: usize) -> mpsc::Sender<OutboundMessage<MAX_PAYLOAD>> {
-        let (tx, rx) = mpsc::channel(queue_capacity);
+    pub fn start_listening(
+        &mut self,
+        queue_capacity: Option<usize>,
+    ) -> mpsc::Sender<OutboundMessage<MAX_PAYLOAD>> {
+        let (tx, rx) = mpsc::channel(queue_capacity.unwrap_or(DEFAULT_OUTBOUND_QUEUE_CAPACITY));
         self.outbound_rx = Some(rx);
         tx
-    }
-
-    pub fn start_listening_default(&mut self) -> mpsc::Sender<OutboundMessage<MAX_PAYLOAD>> {
-        self.start_listening(DEFAULT_OUTBOUND_QUEUE_CAPACITY)
     }
 
     pub fn queue_event<Event>(
@@ -293,13 +288,8 @@ where
             .map_err(|_| ProtocolError::BufferTooSmall)?;
 
         let (tx, rx) = oneshot::channel();
-        self.pending.insert(
-            request_id,
-            PendingRequest {
-                sent_at: Instant::now(),
-                responder: tx,
-            },
-        );
+        self.pending
+            .insert(request_id, PendingRequest { responder: tx });
 
         sender
             .try_send(OutboundMessage::Request {
@@ -327,7 +317,7 @@ where
                 .outbound_rx
                 .as_mut()
                 .ok_or(ProtocolError::MissingOutboundQueue)?;
-            rx.next().await
+            rx.recv().await
         };
 
         let Some(msg) = next else {
@@ -335,7 +325,8 @@ where
         };
 
         let frame = Self::outbound_to_frame(msg)?;
-        write_frame::<T, MAX_PAYLOAD, SERIALIZED_CAP, FRAME_CAP>(&mut self.transport, &frame).await?;
+        write_frame::<T, MAX_PAYLOAD, SERIALIZED_CAP, FRAME_CAP>(&mut self.transport, &frame)
+            .await?;
         Ok(true)
     }
 
@@ -346,34 +337,10 @@ where
     }
 
     pub async fn process_next_incoming(&mut self) -> Result<(), ProtocolError> {
-        let frame = read_frame::<T, MAX_PAYLOAD, FRAME_CAP>(&mut self.transport, &mut self.decoder).await?;
+        let frame =
+            read_frame::<T, MAX_PAYLOAD, FRAME_CAP>(&mut self.transport, &mut self.decoder).await?;
         self.dispatch_incoming(frame).await?;
-        self.prune_timed_out();
         Ok(())
-    }
-
-    pub fn prune_timed_out(&mut self) {
-        let timeout = self.pending_timeout;
-        let now = Instant::now();
-
-        let expired: Vec<u32, 64> = self
-            .pending
-            .iter()
-            .filter_map(|(request_id, pending)| {
-                if now.duration_since(pending.sent_at) >= timeout {
-                    Some(*request_id)
-                } else {
-                    None
-                }
-            })
-            .take(64)
-            .collect();
-
-        for request_id in expired {
-            if let Some(pending) = self.pending.remove(&request_id) {
-                let _ = pending.responder.send(Err(ProtocolError::Timeout));
-            }
-        }
     }
 
     fn allocate_request_id(&mut self) -> u32 {
@@ -382,20 +349,34 @@ where
         current.max(1)
     }
 
-    fn outbound_to_frame(msg: OutboundMessage<MAX_PAYLOAD>) -> Result<Frame<MAX_PAYLOAD>, ProtocolError> {
+    fn outbound_to_frame(
+        msg: OutboundMessage<MAX_PAYLOAD>,
+    ) -> Result<Frame<MAX_PAYLOAD>, ProtocolError> {
         match msg {
             OutboundMessage::Request {
                 opcode,
                 flags,
                 payload,
                 request_id,
-            } => Frame::new(MessageKind::Request, flags, opcode, request_id, payload.as_slice()),
+            } => Frame::new(
+                MessageKind::Request,
+                flags,
+                opcode,
+                request_id,
+                payload.as_slice(),
+            ),
             OutboundMessage::Reply {
                 opcode,
                 flags,
                 payload,
                 request_id,
-            } => Frame::new(MessageKind::Reply, flags, opcode, request_id, payload.as_slice()),
+            } => Frame::new(
+                MessageKind::Reply,
+                flags,
+                opcode,
+                request_id,
+                payload.as_slice(),
+            ),
             OutboundMessage::Event {
                 opcode,
                 flags,
@@ -406,7 +387,20 @@ where
                 flags,
                 payload,
                 request_id,
-            } => Frame::new(MessageKind::Error, flags, opcode, request_id, payload.as_slice()),
+            } => Frame::new(
+                MessageKind::Error,
+                flags,
+                opcode,
+                request_id,
+                payload.as_slice(),
+            ),
+            OutboundMessage::InternalError => {
+                // TODO: more sensible error handling
+                panic!(
+                    "Tried to frame an internal error. Likely caused by a channel producing an invalid state"
+                );
+                Err(ProtocolError::Io)
+            }
         }
     }
 
@@ -417,13 +411,33 @@ where
                 let opcode = frame.header.opcode;
                 match self.registry.dispatch_request(frame).await {
                     Ok(payload) => {
-                        let reply = Frame::new(MessageKind::Reply, 0, opcode, request_id, payload.as_slice())?;
-                        write_frame::<T, MAX_PAYLOAD, SERIALIZED_CAP, FRAME_CAP>(&mut self.transport, &reply).await
+                        let reply = Frame::new(
+                            MessageKind::Reply,
+                            0,
+                            opcode,
+                            request_id,
+                            payload.as_slice(),
+                        )?;
+                        write_frame::<T, MAX_PAYLOAD, SERIALIZED_CAP, FRAME_CAP>(
+                            &mut self.transport,
+                            &reply,
+                        )
+                        .await
                     }
                     Err(err) => {
                         let payload = error_payload::<MAX_PAYLOAD>(&err)?;
-                        let error = Frame::new(MessageKind::Error, 0, opcode, request_id, payload.as_slice())?;
-                        write_frame::<T, MAX_PAYLOAD, SERIALIZED_CAP, FRAME_CAP>(&mut self.transport, &error).await
+                        let error = Frame::new(
+                            MessageKind::Error,
+                            0,
+                            opcode,
+                            request_id,
+                            payload.as_slice(),
+                        )?;
+                        write_frame::<T, MAX_PAYLOAD, SERIALIZED_CAP, FRAME_CAP>(
+                            &mut self.transport,
+                            &error,
+                        )
+                        .await
                     }
                 }
             }
@@ -447,9 +461,12 @@ where
     }
 }
 
-fn serialize_payload<const MAX_PAYLOAD: usize, T: Serialize>(value: &T) -> Result<Vec<u8, MAX_PAYLOAD>, ProtocolError> {
+fn serialize_payload<const MAX_PAYLOAD: usize, T: Serialize>(
+    value: &T,
+) -> Result<Vec<u8, MAX_PAYLOAD>, ProtocolError> {
     let mut serialized_buf = [0u8; MAX_PAYLOAD];
-    let serialized = postcard::to_slice(value, &mut serialized_buf).map_err(|_| ProtocolError::EncodeError)?;
+    let serialized =
+        postcard::to_slice(value, &mut serialized_buf).map_err(|_| ProtocolError::EncodeError)?;
 
     let mut out = Vec::<u8, MAX_PAYLOAD>::new();
     out.extend_from_slice(serialized)
@@ -461,7 +478,9 @@ fn deserialize_payload<T: DeserializeOwned>(payload: &[u8]) -> Result<T, Protoco
     postcard::from_bytes(payload).map_err(|_| ProtocolError::DecodeError)
 }
 
-fn error_payload<const MAX_PAYLOAD: usize>(err: &ProtocolError) -> Result<Vec<u8, MAX_PAYLOAD>, ProtocolError> {
+fn error_payload<const MAX_PAYLOAD: usize>(
+    err: &ProtocolError,
+) -> Result<Vec<u8, MAX_PAYLOAD>, ProtocolError> {
     let mut payload = Vec::new();
     let code = match err {
         ProtocolError::InvalidVersion(_) => 1,
@@ -477,6 +496,8 @@ fn error_payload<const MAX_PAYLOAD: usize>(err: &ProtocolError) -> Result<Vec<u8
         ProtocolError::Io => 11,
     };
 
-    payload.push(code).map_err(|_| ProtocolError::BufferTooSmall)?;
+    payload
+        .push(code)
+        .map_err(|_| ProtocolError::BufferTooSmall)?;
     Ok(payload)
 }

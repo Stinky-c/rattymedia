@@ -1,4 +1,4 @@
-use crate::{decode_packet, encode_packet, Frame, FrameDecoder, MessageKind, ProtocolError};
+use crate::{Frame, FrameDecoder, MessageKind, ProtocolError, decode_packet, encode_packet};
 
 const MAX_PAYLOAD: usize = 64;
 const SERIALIZED_CAP: usize = 128;

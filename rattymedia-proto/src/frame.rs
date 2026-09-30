@@ -63,7 +63,8 @@ impl<const MAX_PAYLOAD: usize> Frame<MAX_PAYLOAD> {
             .extend_from_slice(payload)
             .map_err(|_| ProtocolError::BufferTooSmall)?;
 
-        let payload_len = u16::try_from(payload_vec.len()).map_err(|_| ProtocolError::InvalidPayloadLength)?;
+        let payload_len =
+            u16::try_from(payload_vec.len()).map_err(|_| ProtocolError::InvalidPayloadLength)?;
         let header = FrameHeader {
             version: PROTOCOL_VERSION,
             kind,

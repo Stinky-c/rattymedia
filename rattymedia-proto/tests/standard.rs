@@ -1,11 +1,16 @@
+// #[cfg(not(feature = "std"))]
+// compile_error!("This test depends on feature = std");
+
 use futures::channel::mpsc;
 use futures::executor::block_on;
-use futures_util::StreamExt;
+// use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fmt::{Display, Formatter};
 use std::sync::{Arc, Mutex};
 
-use crate::endpoint::RpcEndpoint;
-use crate::{
+use rattymedia_proto::endpoint::RpcEndpoint;
+use rattymedia_proto::{
     DEFAULT_FRAME_CAP, DEFAULT_MAX_PAYLOAD, DEFAULT_SERIALIZED_CAP, ProtocolError,
 };
 
@@ -42,6 +47,14 @@ struct IncReply {
 #[derive(Debug, Clone, Copy)]
 struct MemIoError;
 
+impl Error for MemIoError {}
+
+impl Display for MemIoError {
+    fn fmt(&self, _f: &mut Formatter<'_>) -> std::fmt::Result {
+        Ok(())
+    }
+}
+
 impl embedded_io_async::Error for MemIoError {
     fn kind(&self) -> embedded_io_async::ErrorKind {
         embedded_io_async::ErrorKind::Other
@@ -63,12 +76,12 @@ impl embedded_io_async::Read for MemoryTransport {
             return Ok(0);
         }
 
-        match self.rx.next().await {
-            Some(byte) => {
+        match self.rx.try_recv() {
+            Ok(byte) => {
                 buf[0] = byte;
                 Ok(1)
             }
-            None => Ok(0),
+            Err(_e) => Ok(0),
         }
     }
 }
@@ -132,7 +145,7 @@ fn typed_event_and_request_end_to_end() {
                 Ok(AddReply { sum: req.a + req.b })
             });
 
-        let mut client_tx = client.start_listening_default();
+        let mut client_tx = client.start_listening(None);
 
         client
             .queue_event(&mut client_tx, OP_EVENT, 0, &StatusEvent { code: 200 })
@@ -149,7 +162,10 @@ fn typed_event_and_request_end_to_end() {
 
         drop(client_tx);
 
-        client.run_tx_loop().await.expect("client tx loop should run");
+        client
+            .run_tx_loop()
+            .await
+            .expect("client tx loop should run");
 
         server
             .process_next_incoming()
@@ -200,8 +216,8 @@ fn full_duplex_typed_requests_both_directions() {
                 })
             });
 
-        let mut client_tx = client.start_listening_default();
-        let mut server_tx = server.start_listening_default();
+        let mut client_tx = client.start_listening(None);
+        let mut server_tx = server.start_listening(None);
 
         let client_pending = client
             .queue_typed_request::<IncRequest, IncReply>(
@@ -224,8 +240,14 @@ fn full_duplex_typed_requests_both_directions() {
         drop(client_tx);
         drop(server_tx);
 
-        client.run_tx_loop().await.expect("client tx loop should run");
-        server.run_tx_loop().await.expect("server tx loop should run");
+        client
+            .run_tx_loop()
+            .await
+            .expect("client tx loop should run");
+        server
+            .run_tx_loop()
+            .await
+            .expect("server tx loop should run");
 
         client
             .process_next_incoming()

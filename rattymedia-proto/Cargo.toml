@@ -9,13 +9,18 @@ description = "Transport agnostic bi-di communication protocol"
 [dependencies]
 serde = { version = "1", default-features = false, features = ["derive"] }
 postcard = { version = "1", default-features = false }
-cobs = { version = "0.3", default-features = false }
-heapless = { version = "0.8", features = ["serde"] }
-embedded-io = "0.6"
-embedded-io-async = "0.6"
-futures = { version = "0.3", default-features = false, features = ["alloc"], optional = true }
+cobs = { version = "0.5", default-features = false }
+heapless = { version = "0.9", features = ["serde"] }
+embedded-io = "0.7"
+embedded-io-async = "0.7"
+futures = { version = "0.3", default-features = false, features = ["alloc"] }
 futures-util = { version = "0.3", default-features = false, features = ["alloc"], optional = true }
+thingbuf = { version = "0.1", default-features = false, features = ["alloc"] }
+
+[dev-dependencies]
+futures = { version = "0.3", features = ["executor"] }
+futures-util = { version = "0.3" }
 
 [features]
 default = []
-std = ["futures/std", "futures/executor", "futures-util/std"]
+std = ["futures/std", "futures-util/std", "thingbuf/std", "embedded-io-async/std", "embedded-io/std"]

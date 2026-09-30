@@ -11,7 +11,8 @@ pub fn encode_packet<const MAX_PAYLOAD: usize, const SERIALIZED_CAP: usize, cons
     frame.validate()?;
 
     let mut serialized_buf = [0u8; SERIALIZED_CAP];
-    let serialized = postcard::to_slice(frame, &mut serialized_buf).map_err(|_| ProtocolError::EncodeError)?;
+    let serialized =
+        postcard::to_slice(frame, &mut serialized_buf).map_err(|_| ProtocolError::EncodeError)?;
 
     let mut cobs_buf = [0u8; TX_CAP];
     let encoded_len = cobs::encode(serialized, &mut cobs_buf);
@@ -32,8 +33,10 @@ pub fn decode_packet<const MAX_PAYLOAD: usize, const RX_CAP: usize>(
     packet_without_delimiter: &[u8],
 ) -> Result<Frame<MAX_PAYLOAD>, ProtocolError> {
     let mut decoded = [0u8; RX_CAP];
-    let decoded_len = cobs::decode(packet_without_delimiter, &mut decoded).map_err(|_| ProtocolError::DecodeError)?;
-    let frame: Frame<MAX_PAYLOAD> = postcard::from_bytes(&decoded[..decoded_len]).map_err(|_| ProtocolError::DecodeError)?;
+    let report = cobs::decode(packet_without_delimiter, &mut decoded)
+        .map_err(|_| ProtocolError::DecodeError)?;
+    let frame: Frame<MAX_PAYLOAD> = postcard::from_bytes(&decoded[..report.frame_size()])
+        .map_err(|_| ProtocolError::DecodeError)?;
     frame.validate()?;
     Ok(frame)
 }
@@ -63,7 +66,9 @@ impl<const MAX_PAYLOAD: usize, const RX_CAP: usize> FrameDecoder<MAX_PAYLOAD, RX
             return Ok(Some(frame));
         }
 
-        self.buf.push(byte).map_err(|_| ProtocolError::BufferTooSmall)?;
+        self.buf
+            .push(byte)
+            .map_err(|_| ProtocolError::BufferTooSmall)?;
         Ok(None)
     }
 }
